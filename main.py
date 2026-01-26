@@ -1,16 +1,7 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
+from models.items import Item
 
 app = FastAPI()
-
-class Item(BaseModel):
-    seller_id: int
-    is_verified_seller: bool
-    item_id: int
-    name: str
-    description: str
-    category: int
-    images_qty: int 
 
 @app.post("/predict")
 async def predict(item: Item) -> bool:
