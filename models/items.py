@@ -7,4 +7,8 @@ class Item(BaseModel):
     name: str
     description: str
     category: int
-    images_qty: int 
+    images_qty: int
+
+class PredictionResponse(BaseModel):
+    is_violation: bool
+    probability: float

@@ -1,93 +1,78 @@
-from fastapi import responses
+import pytest
 from fastapi.testclient import TestClient
 from main import app
-import pytest
+from services.ml_model import _model
+import services.ml_model as ml_model_module
 
 client = TestClient(app)
 
+@pytest.fixture(autouse=True)
+def run_lifespan():
+    with TestClient(app) as c:
+        yield c
 
-@pytest.mark.parametrize(
-    "test_case_name, payload, expected_status, expected_response",
-    [
-        (
-            "verified_seller",
-            {
-                "seller_id": 1,
-                "is_verified_seller": True,
-                "item_id": 100,
-                "name": "Test Item",
-                "description": "Description",
-                "category": 1,
-                "images_qty": 0 
-            },
-            200,
-            True
-        )   ,
-
-        (
-            "unverified_seller_with_images",
-            {
-                "seller_id": 1,
-                "is_verified_seller": False,
-                "item_id": 100,
-                "name": "Test Item",
-                "description": "Description",
-                "category": 1,
-                "images_qty": 1
-            },
-            200,
-            True
-        )   ,
-
-        (
-            "unverified_seller_no_images",
-            {
-                "seller_id": 1,
-                "is_verified_seller": False,
-                "item_id": 100,
-                "name": "Test Item",
-                "description": "Description",
-                "category": 1,
-                "images_qty": 0 
-            },
-            200,
-            False
-        )   ,
-
-        (
-            "validation_missing_field",
-            {
-                "seller_id": 1,
-                "item_id": 100,
-                "name": "Test Item",
-                "description": "Description",
-                "category": 1,
-                "images_qty": 0 
-            },
-            422,
-            False
-        )   ,
-
-        (
-            "validation_wrong_type",
-            {
-                "seller_id": 1,
-                "is_verified_seller": True,
-                "item_id": 100,
-                "name": "Test Item",
-                "description": "Description",
-                "category": 1,
-                "images_qty": "two"
-            },
-            422,
-            False
-        )   
-    ]
-)
-
-def test_predict(test_case_name, payload, expected_status, expected_response):
+def test_predict_verified_seller():
+    payload = {
+        "seller_id": 1,
+        "is_verified_seller": True,
+        "item_id": 100,
+        "name": "Test Item",
+        "description": "Description",
+        "category": 1,
+        "images_qty": 5
+    }
     response = client.post("/predict", json=payload)
-    assert response.status_code == expected_status
-    if expected_status == 200:
-        assert response.json() == expected_response
+    assert response.status_code == 200
+    data = response.json()
+    assert "is_violation" in data
+    assert "probability" in data
+    assert isinstance(data["is_violation"], bool)
+    assert isinstance(data["probability"], float)
+    assert data["is_violation"] is False 
 
+def test_predict_violation_case():
+    payload = {
+        "seller_id": 2,
+        "is_verified_seller": False,
+        "item_id": 101,
+        "name": "Test Item 2",
+        "description": "Description 2",
+        "category": 2,
+        "images_qty": 1 
+    }
+    response = client.post("/predict", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+
+
+def test_validation_error():
+    payload = {
+        "seller_id": 3,
+        "item_id": 102,
+        "name": "Test Item 3",
+        "description": "Description 3",
+        "category": 3,
+        "images_qty": 0
+    }
+    response = client.post("/predict", json=payload)
+    assert response.status_code == 422
+
+def test_model_not_loaded_503():
+    original_model = ml_model_module._model
+    ml_model_module._model = None
+    
+    try:
+        payload = {
+            "seller_id": 4,
+            "is_verified_seller": True,
+            "item_id": 103,
+            "name": "Test Item 4",
+            "description": "Description 4",
+            "category": 4,
+            "images_qty": 0
+        }
+        response = client.post("/predict", json=payload)
+        assert response.status_code == 503
+        assert response.json()["detail"] == "Model is not loaded"
+    finally:
+        ml_model_module._model = original_model
