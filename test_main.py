@@ -1,3 +1,4 @@
+from _pytest import monkeypatch
 import pytest
 from fastapi.testclient import TestClient
 from main import app
@@ -57,22 +58,18 @@ def test_validation_error():
     response = client.post("/predict", json=payload)
     assert response.status_code == 422
 
-def test_model_not_loaded_503():
-    original_model = ml_model_module._model
-    ml_model_module._model = None
-    
-    try:
-        payload = {
-            "seller_id": 4,
-            "is_verified_seller": True,
-            "item_id": 103,
-            "name": "Test Item 4",
-            "description": "Description 4",
-            "category": 4,
-            "images_qty": 0
-        }
-        response = client.post("/predict", json=payload)
-        assert response.status_code == 503
-        assert response.json()["detail"] == "Model is not loaded"
-    finally:
-        ml_model_module._model = original_model
+def test_model_not_loaded_503(monkeypatch):
+    monkeypatch.setattr(ml_model_module,"_model", None)
+
+    payload = {
+        "seller_id": 4,
+        "is_verified_seller": True,
+        "item_id": 103,
+        "name": "Test Item 4",
+        "description": "Description 4",
+        "category": 4,
+        "images_qty": 0
+    }
+    response = client.post("/predict", json=payload)
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Model is not loaded"
