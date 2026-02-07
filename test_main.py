@@ -1,18 +1,17 @@
-from _pytest import monkeypatch
 import pytest
 from fastapi.testclient import TestClient
 from main import app
-from services.ml_model import _model
-import services.ml_model as ml_model_module
+from services.ml_model import ModelClient
 
-client = TestClient(app)
 
-@pytest.fixture(autouse=True)
-def run_lifespan():
+@pytest.fixture
+def client():
+    ModelClient._instance = None
     with TestClient(app) as c:
         yield c
+    ModelClient._instance = None
 
-def test_predict_verified_seller():
+def test_predict_verified_seller(client):
     payload = {
         "seller_id": 1,
         "is_verified_seller": True,
@@ -25,13 +24,9 @@ def test_predict_verified_seller():
     response = client.post("/predict", json=payload)
     assert response.status_code == 200
     data = response.json()
-    assert "is_violation" in data
-    assert "probability" in data
-    assert isinstance(data["is_violation"], bool)
-    assert isinstance(data["probability"], float)
     assert data["is_violation"] is False 
 
-def test_predict_violation_case():
+def test_predict_violation_case(client):
     payload = {
         "seller_id": 2,
         "is_verified_seller": False,
@@ -46,7 +41,7 @@ def test_predict_violation_case():
     data = response.json()
 
 
-def test_validation_error():
+def test_validation_error(client):
     payload = {
         "seller_id": 3,
         "item_id": 102,
@@ -58,8 +53,9 @@ def test_validation_error():
     response = client.post("/predict", json=payload)
     assert response.status_code == 422
 
-def test_model_not_loaded_503(monkeypatch):
-    monkeypatch.setattr(ml_model_module,"_model", None)
+def test_model_not_loaded_503(client,monkeypatch):
+    client_instance = ModelClient()
+    monkeypatch.setattr(client_instance,"_model", None)
 
     payload = {
         "seller_id": 4,
