@@ -1,10 +1,21 @@
 import pytest
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
+
 from fastapi.testclient import TestClient
 from main import app
 from services.ml_model import ModelClient
 from repositories.advertisements import AdvertisementRepository
 from repositories.users import UserRepository
-from models.domain import UserCreate, AdvertisementCreate, User, Advertisement, AdvertisementWithUser
+from repositories.moderation_results import ModerationResultRepository
+from models.domain import (
+    UserCreate,
+    AdvertisementCreate,
+    User,
+    Advertisement,
+    AdvertisementWithUser,
+    ModerationResult,
+)
 
 
 @pytest.fixture
@@ -51,12 +62,16 @@ def test_predict_parametrized(client, is_verified, images_qty, expected_violatio
     assert 0 <= data["probability"] <= 1
 
 
-@pytest.mark.parametrize("name,description,expected_status", [
-    ("", "Valid description", 200),
-    ("Valid name", "", 200),
-    ("Name", "A" * 5000, 200),
-    ("A" * 1000, "Description", 200),
-])
+@pytest.mark.parametrize(
+    "name,description,expected_status",
+    [
+        ("", "Valid description", 200),
+        ("Valid name", "", 200),
+        ("Name", "A" * 5000, 200),
+        ("A" * 1000, "Description", 200),
+    ],
+    ids=["empty_name", "empty_desc", "long_desc", "long_name"],
+)
 def test_predict_edge_cases_parametrized(client, name, description, expected_status):
     payload = {
         "seller_id": 1,
@@ -243,9 +258,206 @@ def test_simple_predict_missing_id(client):
 def test_simple_predict_advertisement_not_found(client, monkeypatch):
     async def mock_get_with_user(self, ad_id):
         return None
-    
+
     monkeypatch.setattr(AdvertisementRepository, "get_with_user", mock_get_with_user)
-    
+
     response = client.post("/simple_predict", json={"advertisement_id": 99999})
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+
+
+def test_async_predict_creates_task(client, monkeypatch):
+    mock_ad = Advertisement(
+        id=1, user_id=1, name="A", description="B", category=1, images_qty=5
+    )
+
+    async def mock_get_by_id(self, ad_id):
+        return mock_ad if ad_id == 1 else None
+
+    monkeypatch.setattr(AdvertisementRepository, "get_by_id", mock_get_by_id)
+
+    created = ModerationResult(
+        id=123,
+        item_id=1,
+        status="pending",
+        is_violation=None,
+        probability=None,
+        error_message=None,
+        created_at=datetime.now(timezone.utc),
+        processed_at=None,
+    )
+
+    async def mock_create_pending(self, item_id):
+        return created
+
+    monkeypatch.setattr(ModerationResultRepository, "create_pending", mock_create_pending)
+
+    mock_kafka = MagicMock()
+    mock_kafka.send_moderation_request = AsyncMock(return_value=None)
+    client.app.state.kafka = mock_kafka
+
+    response = client.post("/async_predict", json={"item_id": 1})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_id"] == 123
+    assert data["status"] == "pending"
+    assert "Moderation request accepted" in data["message"]
+    mock_kafka.send_moderation_request.assert_called_once_with(1, 123)
+
+
+def test_async_predict_accepts_any_item_id(client, monkeypatch):
+    created = ModerationResult(
+        id=456,
+        item_id=99999,
+        status="pending",
+        is_violation=None,
+        probability=None,
+        error_message=None,
+        created_at=datetime.now(timezone.utc),
+        processed_at=None,
+    )
+
+    async def mock_create_pending(self, item_id):
+        return created
+
+    monkeypatch.setattr(ModerationResultRepository, "create_pending", mock_create_pending)
+    kafka = MagicMock()
+    kafka.send_moderation_request = AsyncMock()
+    client.app.state.kafka = kafka
+
+    response = client.post("/async_predict", json={"item_id": 99999})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_id"] == 456
+    kafka.send_moderation_request.assert_called_once_with(99999, 456)
+
+
+def test_async_predict_kafka_unavailable(client, monkeypatch):
+    client.app.state.kafka = None
+
+    response = client.post("/async_predict", json={"item_id": 1})
+    assert response.status_code == 503
+    assert "Kafka" in response.json()["detail"]
+
+
+def test_moderation_result_pending(client, monkeypatch):
+    result = ModerationResult(
+        id=10,
+        item_id=1,
+        status="pending",
+        is_violation=None,
+        probability=None,
+        error_message=None,
+        created_at=datetime.now(timezone.utc),
+        processed_at=None,
+    )
+
+    async def mock_get_by_id(self, task_id):
+        return result if task_id == 10 else None
+
+    monkeypatch.setattr(ModerationResultRepository, "get_by_id", mock_get_by_id)
+
+    response = client.get("/moderation_result/10")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_id"] == 10
+    assert data["status"] == "pending"
+    assert data["is_violation"] is None
+    assert data["probability"] is None
+
+
+def test_moderation_result_completed(client, monkeypatch):
+    result = ModerationResult(
+        id=20,
+        item_id=2,
+        status="completed",
+        is_violation=True,
+        probability=0.87,
+        error_message=None,
+        created_at=datetime.now(timezone.utc),
+        processed_at=datetime.now(timezone.utc),
+    )
+
+    async def mock_get_by_id(self, task_id):
+        return result if task_id == 20 else None
+
+    monkeypatch.setattr(ModerationResultRepository, "get_by_id", mock_get_by_id)
+
+    response = client.get("/moderation_result/20")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["task_id"] == 20
+    assert data["status"] == "completed"
+    assert data["is_violation"] is True
+    assert data["probability"] == 0.87
+
+
+def test_moderation_result_not_found(client, monkeypatch):
+    async def mock_get_by_id(self, task_id):
+        return None
+
+    monkeypatch.setattr(ModerationResultRepository, "get_by_id", mock_get_by_id)
+
+    response = client.get("/moderation_result/99999")
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_moderation_result_failed_includes_error(client, monkeypatch):
+    result = ModerationResult(
+        id=30,
+        item_id=3,
+        status="failed",
+        is_violation=None,
+        probability=None,
+        error_message="Advertisement not found",
+        created_at=datetime.now(timezone.utc),
+        processed_at=datetime.now(timezone.utc),
+    )
+
+    async def mock_get_by_id(self, task_id):
+        return result if task_id == 30 else None
+
+    monkeypatch.setattr(ModerationResultRepository, "get_by_id", mock_get_by_id)
+
+    response = client.get("/moderation_result/30")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "failed"
+    assert data["error_message"] == "Advertisement not found"
+
+
+@pytest.mark.asyncio
+async def test_worker_sends_to_dlq_when_ad_not_found(monkeypatch):
+    from app.workers.moderation_worker import process_message
+    from app.clients.kafka import KafkaProducerClient
+
+    ad_repo = AdvertisementRepository()
+    mod_repo = ModerationResultRepository()
+    kafka = KafkaProducerClient()
+
+    async def mock_get_with_user(self, ad_id):
+        return None
+
+    monkeypatch.setattr(AdvertisementRepository, "get_with_user", mock_get_with_user)
+
+    set_failed_calls = []
+    async def mock_set_failed(self, task_id, error_message):
+        set_failed_calls.append((task_id, error_message))
+
+    send_to_dlq_calls = []
+    async def mock_send_to_dlq(self, original_message, error, retry_count=1):
+        send_to_dlq_calls.append((original_message, error, retry_count))
+
+    monkeypatch.setattr(ModerationResultRepository, "set_failed", mock_set_failed)
+    monkeypatch.setattr(KafkaProducerClient, "send_to_dlq", mock_send_to_dlq)
+
+    message = {"item_id": 999, "task_id": 1, "timestamp": "2025-02-04T12:00:00Z"}
+    await process_message(message, ad_repo, mod_repo, kafka)
+
+    assert len(set_failed_calls) == 1
+    assert set_failed_calls[0][0] == 1
+    assert "not found" in set_failed_calls[0][1].lower()
+    assert len(send_to_dlq_calls) == 1
+    assert send_to_dlq_calls[0][0] == message
+    assert send_to_dlq_calls[0][2] == 1

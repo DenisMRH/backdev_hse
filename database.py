@@ -20,8 +20,10 @@ class Database:
         if self._pool is None:
             conn_string = os.getenv(
                 "DATABASE_URL",
-                "postgresql://postgres:postgres@localhost:5433/ads_db"
+                "postgresql://postgres:postgres@localhost:5434/ads_db"
             )
+            safe_url = conn_string.split("@")[-1] if "@" in conn_string else "?"
+            logger.info("Database connecting to %s", safe_url)
             self._pool = await asyncpg.create_pool(conn_string, min_size=1, max_size=10)
             logger.info("Database pool created")
     
