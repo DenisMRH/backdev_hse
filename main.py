@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.clients.kafka import KafkaProducerClient
+from app.clients.redis_client import RedisClient
 from routers.items import router as items_router
 from services.ml_model import ModelClient
 from database import Database
@@ -32,6 +33,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize Database: {e}")
 
+    logger.info("Initializing Redis...")
+    redis_client = RedisClient()
+    try:
+        await redis_client.connect()
+        app.state.redis = redis_client
+        logger.info("Redis ready")
+    except Exception as e:
+        logger.error(f"Failed to connect Redis: {e}")
+        app.state.redis = None
+
     logger.info("Initializing Kafka producer...")
     kafka = KafkaProducerClient()
     try:
@@ -48,6 +59,9 @@ async def lifespan(app: FastAPI):
         if getattr(app.state, "kafka", None) is not None:
             logger.info("Stopping Kafka producer...")
             await kafka.stop()
+        if getattr(app.state, "redis", None) is not None:
+            logger.info("Closing Redis...")
+            await app.state.redis.close()
         logger.info("Disconnecting from database...")
         await db.close()
         logger.info("Database disconnected")

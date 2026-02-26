@@ -61,6 +61,22 @@ class ModerationResultRepository:
                 task_id,
             )
 
+    async def get_task_ids_by_item_id(self, item_id: int) -> list[int]:
+        async with self.db.get_connection() as conn:
+            rows = await conn.fetch(
+                "SELECT id FROM moderation_results WHERE item_id = $1",
+                item_id,
+            )
+            return [r["id"] for r in rows]
+
+    async def delete_by_item_id(self, item_id: int) -> int:
+        async with self.db.get_connection() as conn:
+            result = await conn.execute(
+                "DELETE FROM moderation_results WHERE item_id = $1",
+                item_id,
+            )
+            return int(result.split()[-1]) if result else 0
+
     def _row_to_model(self, row) -> ModerationResult:
         return ModerationResult(
             id=row["id"],

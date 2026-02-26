@@ -341,6 +341,8 @@ def test_async_predict_kafka_unavailable(client, monkeypatch):
 
 
 def test_moderation_result_pending(client, monkeypatch):
+    from storages.prediction_cache import PredictionCacheStorage
+
     result = ModerationResult(
         id=10,
         item_id=1,
@@ -356,6 +358,7 @@ def test_moderation_result_pending(client, monkeypatch):
         return result if task_id == 10 else None
 
     monkeypatch.setattr(ModerationResultRepository, "get_by_id", mock_get_by_id)
+    monkeypatch.setattr(PredictionCacheStorage, "get_moderation_result", AsyncMock(return_value=None))
 
     response = client.get("/moderation_result/10")
     assert response.status_code == 200
@@ -367,6 +370,8 @@ def test_moderation_result_pending(client, monkeypatch):
 
 
 def test_moderation_result_completed(client, monkeypatch):
+    from storages.prediction_cache import PredictionCacheStorage
+
     result = ModerationResult(
         id=20,
         item_id=2,
@@ -382,6 +387,8 @@ def test_moderation_result_completed(client, monkeypatch):
         return result if task_id == 20 else None
 
     monkeypatch.setattr(ModerationResultRepository, "get_by_id", mock_get_by_id)
+    monkeypatch.setattr(PredictionCacheStorage, "get_moderation_result", AsyncMock(return_value=None))
+    monkeypatch.setattr(PredictionCacheStorage, "set_moderation_result", AsyncMock())
 
     response = client.get("/moderation_result/20")
     assert response.status_code == 200
@@ -393,10 +400,13 @@ def test_moderation_result_completed(client, monkeypatch):
 
 
 def test_moderation_result_not_found(client, monkeypatch):
+    from storages.prediction_cache import PredictionCacheStorage
+
     async def mock_get_by_id(self, task_id):
         return None
 
     monkeypatch.setattr(ModerationResultRepository, "get_by_id", mock_get_by_id)
+    monkeypatch.setattr(PredictionCacheStorage, "get_moderation_result", AsyncMock(return_value=None))
 
     response = client.get("/moderation_result/99999")
     assert response.status_code == 404
@@ -404,6 +414,8 @@ def test_moderation_result_not_found(client, monkeypatch):
 
 
 def test_moderation_result_failed_includes_error(client, monkeypatch):
+    from storages.prediction_cache import PredictionCacheStorage
+
     result = ModerationResult(
         id=30,
         item_id=3,
@@ -419,12 +431,60 @@ def test_moderation_result_failed_includes_error(client, monkeypatch):
         return result if task_id == 30 else None
 
     monkeypatch.setattr(ModerationResultRepository, "get_by_id", mock_get_by_id)
+    monkeypatch.setattr(PredictionCacheStorage, "get_moderation_result", AsyncMock(return_value=None))
 
     response = client.get("/moderation_result/30")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "failed"
     assert data["error_message"] == "Advertisement not found"
+
+
+def test_close_advertisement_not_found(client, monkeypatch):
+    async def mock_get_by_id(self, ad_id):
+        return None
+
+    monkeypatch.setattr(AdvertisementRepository, "get_by_id", mock_get_by_id)
+
+    response = client.post("/close", json={"item_id": 99999})
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_close_advertisement_success(client, monkeypatch):
+    from storages.prediction_cache import PredictionCacheStorage
+
+    mock_ad = Advertisement(
+        id=1,
+        user_id=1,
+        name="Test",
+        description="Desc",
+        category=1,
+        images_qty=5,
+    )
+
+    async def mock_get_by_id(self, ad_id):
+        return mock_ad if ad_id == 1 else None
+
+    async def mock_get_task_ids(self, item_id):
+        return [10, 11]
+
+    async def mock_delete_by_item_id(self, item_id):
+        pass
+
+    async def mock_delete_ad(self, ad_id):
+        return True
+
+    monkeypatch.setattr(AdvertisementRepository, "get_by_id", mock_get_by_id)
+    monkeypatch.setattr(ModerationResultRepository, "get_task_ids_by_item_id", mock_get_task_ids)
+    monkeypatch.setattr(ModerationResultRepository, "delete_by_item_id", mock_delete_by_item_id)
+    monkeypatch.setattr(AdvertisementRepository, "delete", mock_delete_ad)
+    monkeypatch.setattr(PredictionCacheStorage, "delete_prediction_by_ad", AsyncMock())
+    monkeypatch.setattr(PredictionCacheStorage, "delete_moderation_results_by_task_ids", AsyncMock())
+
+    response = client.post("/close", json={"item_id": 1})
+    assert response.status_code == 200
+    assert "closed" in response.json()["message"].lower()
 
 
 @pytest.mark.asyncio

@@ -2,12 +2,15 @@ import logging
 from models.items import Item
 from services.ml_model import get_prediction
 from repositories.advertisements import AdvertisementRepository
+from storages.prediction_cache import PredictionCacheStorage
 
 logger = logging.getLogger(__name__)
+
 
 class ItemsService:
     def __init__(self):
         self.ad_repository = AdvertisementRepository()
+        self.cache = PredictionCacheStorage()
     
     async def predict(self, item: Item) -> tuple[bool, float]:
         logger.info(f"Predicting for seller_id={item.seller_id}, item_id={item.item_id}")
@@ -27,13 +30,17 @@ class ItemsService:
         return is_violation, probability
     
     async def predict_by_id(self, advertisement_id: int) -> tuple[bool, float]:
+        cached = await self.cache.get_prediction_by_ad(advertisement_id)
+        if cached is not None:
+            return cached
+
         logger.info(f"Predicting for advertisement_id={advertisement_id}")
-        
+
         ad_with_user = await self.ad_repository.get_with_user(advertisement_id)
-        
+
         if ad_with_user is None:
             raise ValueError(f"Advertisement with id {advertisement_id} not found")
-        
+
         item = Item(
             seller_id=ad_with_user.user_id,
             is_verified_seller=ad_with_user.is_verified_seller,
@@ -43,5 +50,7 @@ class ItemsService:
             category=ad_with_user.category,
             images_qty=ad_with_user.images_qty
         )
-        
-        return await self.predict(item)
+
+        is_violation, probability = await self.predict(item)
+        await self.cache.set_prediction_by_ad(advertisement_id, is_violation, probability)
+        return is_violation, probability

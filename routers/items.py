@@ -4,8 +4,10 @@ from models.items import Item, PredictionResponse
 from models.domain import ModerationResult
 from services.items import ItemsService
 from services.ml_model import ModelNotLoadedError
+from repositories.advertisements import AdvertisementRepository
 from repositories.moderation_results import ModerationResultRepository
 from app.clients.kafka import KafkaProducerClient
+from storages.prediction_cache import PredictionCacheStorage
 import logging
 
 router = APIRouter()
@@ -17,6 +19,10 @@ class SimplePredictRequest(BaseModel):
 
 
 class AsyncPredictRequest(BaseModel):
+    item_id: int = Field(..., gt=0)
+
+
+class CloseRequest(BaseModel):
     item_id: int = Field(..., gt=0)
 
 
@@ -102,6 +108,11 @@ async def async_predict(
 
 @router.get("/moderation_result/{task_id}")
 async def get_moderation_result(task_id: int) -> dict:
+    cache = PredictionCacheStorage()
+    cached = await cache.get_moderation_result(task_id)
+    if cached is not None:
+        return cached
+
     mod_repo = ModerationResultRepository()
     result = await mod_repo.get_by_id(task_id)
     if result is None:
@@ -117,4 +128,30 @@ async def get_moderation_result(task_id: int) -> dict:
     }
     if result.status == "failed" and result.error_message:
         response["error_message"] = result.error_message
+    if result.status == "completed":
+        await cache.set_moderation_result(task_id, response)
     return response
+
+
+@router.post("/close")
+async def close_advertisement(request: CloseRequest) -> dict:
+    item_id = request.item_id
+    ad_repo = AdvertisementRepository()
+    mod_repo = ModerationResultRepository()
+    cache = PredictionCacheStorage()
+
+    ad = await ad_repo.get_by_id(item_id)
+    if ad is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Advertisement with id {item_id} not found",
+        )
+
+    task_ids = await mod_repo.get_task_ids_by_item_id(item_id)
+    await cache.delete_prediction_by_ad(item_id)
+    await cache.delete_moderation_results_by_task_ids(task_ids)
+
+    await mod_repo.delete_by_item_id(item_id)
+    await ad_repo.delete(item_id)
+
+    return {"message": "Advertisement closed successfully"}
