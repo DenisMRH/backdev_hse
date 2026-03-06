@@ -340,6 +340,40 @@ def test_async_predict_kafka_unavailable(client, monkeypatch):
     assert "Kafka" in response.json()["detail"]
 
 
+def test_async_predict_kafka_send_failure_marks_task_failed(client, monkeypatch):
+    created = ModerationResult(
+        id=777,
+        item_id=1,
+        status="pending",
+        is_violation=None,
+        probability=None,
+        error_message=None,
+        created_at=datetime.now(timezone.utc),
+        processed_at=None,
+    )
+
+    async def mock_create_pending(self, item_id):
+        return created
+
+    failed_calls = []
+
+    async def mock_set_failed(self, task_id, error_message):
+        failed_calls.append((task_id, error_message))
+
+    monkeypatch.setattr(ModerationResultRepository, "create_pending", mock_create_pending)
+    monkeypatch.setattr(ModerationResultRepository, "set_failed", mock_set_failed)
+
+    kafka = MagicMock()
+    kafka.send_moderation_request = AsyncMock(side_effect=RuntimeError("kafka down"))
+    client.app.state.kafka = kafka
+
+    response = client.post("/async_predict", json={"item_id": 1})
+    assert response.status_code == 503
+    assert "Failed to send" in response.json()["detail"]
+    assert len(failed_calls) == 1
+    assert failed_calls[0][0] == 777
+
+
 def test_moderation_result_pending(client, monkeypatch):
     from storages.prediction_cache import PredictionCacheStorage
 
@@ -472,13 +506,13 @@ def test_close_advertisement_success(client, monkeypatch):
     async def mock_delete_by_item_id(self, item_id):
         pass
 
-    async def mock_delete_ad(self, ad_id):
+    async def mock_close_ad(self, ad_id):
         return True
 
     monkeypatch.setattr(AdvertisementRepository, "get_by_id", mock_get_by_id)
     monkeypatch.setattr(ModerationResultRepository, "get_task_ids_by_item_id", mock_get_task_ids)
     monkeypatch.setattr(ModerationResultRepository, "delete_by_item_id", mock_delete_by_item_id)
-    monkeypatch.setattr(AdvertisementRepository, "delete", mock_delete_ad)
+    monkeypatch.setattr(AdvertisementRepository, "close", mock_close_ad)
     monkeypatch.setattr(PredictionCacheStorage, "delete_prediction_by_ad", AsyncMock())
     monkeypatch.setattr(PredictionCacheStorage, "delete_moderation_results_by_task_ids", AsyncMock())
 

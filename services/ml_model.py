@@ -1,12 +1,29 @@
 import pickle
 import numpy as np
 from pathlib import Path
-from typing import Tuple
+from typing import Protocol, Tuple
 from sklearn.linear_model import LogisticRegression
 
 
 class ModelNotLoadedError(RuntimeError):
     pass
+
+
+class FeatureSource(Protocol):
+    is_verified_seller: bool
+    images_qty: int
+    description: str
+    category: int
+
+
+def build_features(source: FeatureSource) -> list[float]:
+    """Build the normalized feature vector used by the moderation model."""
+    feat_verified = 1.0 if source.is_verified_seller else 0.0
+    feat_images = min(source.images_qty, 10) / 10.0
+    feat_desc_len = len(source.description) / 1000.0
+    feat_category = source.category / 100.0
+    return [feat_verified, feat_images, feat_desc_len, feat_category]
+
 
 class ModelClient:
     _instance = None

@@ -10,6 +10,13 @@ from models.domain import UserCreate, AdvertisementCreate
 async def db():
     database = Database()
     await database.initialize()
+    async with database.get_connection() as conn:
+        await conn.execute(
+            """
+            ALTER TABLE advertisements
+            ADD COLUMN IF NOT EXISTS is_closed BOOLEAN NOT NULL DEFAULT FALSE
+            """
+        )
     yield database
     await database.close()
 

@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from aiokafka import AIOKafkaConsumer
-from services.ml_model import get_prediction, ModelNotLoadedError
+from services.ml_model import build_features, get_prediction, ModelNotLoadedError
 from repositories.advertisements import AdvertisementRepository
 from repositories.moderation_results import ModerationResultRepository
 from app.clients.kafka import KafkaProducerClient, MODERATION_TOPIC, MODERATION_DLQ_TOPIC
@@ -21,15 +21,6 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 5
-
-
-def build_features(ad) -> list[float]:
-    feat_verified = 1.0 if ad.is_verified_seller else 0.0
-    feat_images = min(ad.images_qty, 10) / 10.0
-    feat_desc_len = len(ad.description) / 1000.0
-    feat_category = ad.category / 100.0
-    return [feat_verified, feat_images, feat_desc_len, feat_category]
-
 
 async def process_message(
     message_value: dict,
@@ -70,8 +61,9 @@ async def process_message(
             logger.warning(f"Attempt {attempt}/{MAX_RETRIES}: {e}", exc_info=True)
 
         if attempt < MAX_RETRIES:
-            logger.info(f"Retrying in {RETRY_DELAY_SECONDS} seconds...")
-            await asyncio.sleep(RETRY_DELAY_SECONDS)
+            delay_seconds = RETRY_DELAY_SECONDS * (2 ** (attempt - 1))
+            logger.info(f"Retrying in {delay_seconds} seconds...")
+            await asyncio.sleep(delay_seconds)
 
     error_msg = last_error or "Unknown error after retries"
     await mod_repo.set_failed(task_id, error_msg)

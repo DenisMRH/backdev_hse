@@ -98,7 +98,16 @@ async def async_predict(
         )
     mod_repo = ModerationResultRepository()
     result = await mod_repo.create_pending(request.item_id)
-    await kafka.send_moderation_request(request.item_id, result.id)
+    try:
+        await kafka.send_moderation_request(request.item_id, result.id)
+    except Exception as e:
+        error_message = f"Failed to send moderation request for task_id={result.id}"
+        await mod_repo.set_failed(result.id, error_message)
+        logger.exception("%s: %s", error_message, e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to send moderation request",
+        )
     return {
         "task_id": result.id,
         "status": "pending",
@@ -152,6 +161,6 @@ async def close_advertisement(request: CloseRequest) -> dict:
     await cache.delete_moderation_results_by_task_ids(task_ids)
 
     await mod_repo.delete_by_item_id(item_id)
-    await ad_repo.delete(item_id)
+    await ad_repo.close(item_id)
 
     return {"message": "Advertisement closed successfully"}

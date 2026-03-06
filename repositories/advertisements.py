@@ -41,7 +41,7 @@ class AdvertisementRepository:
                 """
                 SELECT id, user_id, name, description, category, images_qty
                 FROM advertisements
-                WHERE id = $1
+                WHERE id = $1 AND is_closed = FALSE
                 """,
                 ad_id
             )
@@ -65,7 +65,7 @@ class AdvertisementRepository:
                     u.is_verified as is_verified_seller
                 FROM advertisements a
                 JOIN users u ON a.user_id = u.id
-                WHERE a.id = $1
+                WHERE a.id = $1 AND a.is_closed = FALSE
                 """,
                 ad_id
             )
@@ -80,6 +80,21 @@ class AdvertisementRepository:
                 images_qty=row['images_qty'],
                 is_verified_seller=row['is_verified_seller']
             )
+
+    async def close(self, ad_id: int) -> bool:
+        async with self.db.get_connection() as conn:
+            result = await conn.execute(
+                """
+                UPDATE advertisements
+                SET is_closed = TRUE
+                WHERE id = $1 AND is_closed = FALSE
+                """,
+                ad_id,
+            )
+            updated = result.split()[-1] == "1"
+            if updated:
+                logger.info(f"Advertisement closed: id={ad_id}")
+            return updated
     
     async def delete(self, ad_id: int) -> bool:
         async with self.db.get_connection() as conn:
