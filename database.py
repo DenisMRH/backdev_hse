@@ -1,10 +1,60 @@
 import asyncpg
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 import logging
 import os
+import time
 
 logger = logging.getLogger(__name__)
+
+from app.metrics import DB_QUERY_DURATION_SECONDS
+
+
+def _query_type(sql: Any) -> Optional[str]:
+    if not isinstance(sql, str):
+        return None
+    head = sql.lstrip().split(None, 1)
+    if not head:
+        return None
+    verb = head[0].lower()
+    if verb in {"select", "insert", "update", "delete"}:
+        return verb
+    return None
+
+
+class _InstrumentedConnection:
+    def __init__(self, conn: asyncpg.Connection):
+        self._conn = conn
+
+    async def fetchrow(self, query: str, *args, **kwargs):
+        qt = _query_type(query)
+        start = time.perf_counter()
+        try:
+            return await self._conn.fetchrow(query, *args, **kwargs)
+        finally:
+            if qt is not None:
+                DB_QUERY_DURATION_SECONDS.labels(query_type=qt).observe(time.perf_counter() - start)
+
+    async def fetch(self, query: str, *args, **kwargs):
+        qt = _query_type(query)
+        start = time.perf_counter()
+        try:
+            return await self._conn.fetch(query, *args, **kwargs)
+        finally:
+            if qt is not None:
+                DB_QUERY_DURATION_SECONDS.labels(query_type=qt).observe(time.perf_counter() - start)
+
+    async def execute(self, query: str, *args, **kwargs):
+        qt = _query_type(query)
+        start = time.perf_counter()
+        try:
+            return await self._conn.execute(query, *args, **kwargs)
+        finally:
+            if qt is not None:
+                DB_QUERY_DURATION_SECONDS.labels(query_type=qt).observe(time.perf_counter() - start)
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
 
 
 class Database:
@@ -39,4 +89,4 @@ class Database:
             raise RuntimeError("Database pool is not initialized")
         
         async with self._pool.acquire() as connection:
-            yield connection
+            yield _InstrumentedConnection(connection)

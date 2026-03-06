@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -11,7 +12,9 @@ from services.ml_model import build_features, get_prediction, ModelNotLoadedErro
 from repositories.advertisements import AdvertisementRepository
 from repositories.moderation_results import ModerationResultRepository
 from app.clients.kafka import KafkaProducerClient, MODERATION_TOPIC, MODERATION_DLQ_TOPIC
+from app.observability import PrometheusMetricsRecorder
 from database import Database
+from services.ports.metrics import get_metrics_recorder, set_metrics_recorder
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,18 +49,29 @@ async def process_message(
         return
 
     last_error = None
+    recorder = get_metrics_recorder()
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             features = build_features(ad_with_user)
+            start = time.perf_counter()
             is_violation, probability = get_prediction(features)
+            elapsed = time.perf_counter() - start
+            recorder.observe_prediction_inference(inference_seconds=elapsed)
+
+            result_label = "violation" if is_violation else "no_violation"
+            recorder.record_prediction_result(result=result_label)
+            recorder.observe_prediction_probability(probability=probability)
+
             await mod_repo.set_completed(task_id, is_violation, probability)
             logger.info(f"Task {task_id} completed: is_violation={is_violation}, probability={probability}")
             return
         except ModelNotLoadedError as e:
             last_error = str(e)
+            recorder.record_prediction_error(error_type="model_unavailable")
             logger.warning(f"Attempt {attempt}/{MAX_RETRIES}: Model not loaded")
         except Exception as e:
             last_error = str(e)
+            recorder.record_prediction_error(error_type="prediction_error")
             logger.warning(f"Attempt {attempt}/{MAX_RETRIES}: {e}", exc_info=True)
 
         if attempt < MAX_RETRIES:
@@ -72,6 +86,8 @@ async def process_message(
 
 
 async def run_worker() -> None:
+    set_metrics_recorder(PrometheusMetricsRecorder())
+
     db = Database()
     await db.initialize()
 

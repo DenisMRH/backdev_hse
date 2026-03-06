@@ -5,8 +5,10 @@ from fastapi import FastAPI
 
 from app.clients.kafka import KafkaProducerClient
 from app.clients.redis_client import RedisClient
+from app.observability import PrometheusMiddleware, PrometheusMetricsRecorder, metrics_router
 from routers.items import router as items_router
 from services.ml_model import ModelClient
+from services.ports.metrics import set_metrics_recorder
 from database import Database
 
 logging.basicConfig(
@@ -18,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    set_metrics_recorder(PrometheusMetricsRecorder())
+
     logger.info("Initializing ML Client...")
     try:
         ModelClient()
@@ -82,4 +86,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+app.add_middleware(PrometheusMiddleware, exclude_paths={"/metrics"})
+
 app.include_router(items_router)
+app.include_router(metrics_router)

@@ -1,8 +1,12 @@
 import logging
+import time
+
 from models.items import Item
 from services.ml_model import build_features, get_prediction
 from repositories.advertisements import AdvertisementRepository
 from storages.prediction_cache import PredictionCacheStorage
+from services.ml_model import ModelNotLoadedError
+from services.ports.metrics import get_metrics_recorder
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +22,22 @@ class ItemsService:
         features = build_features(item)
         logger.info(f"Features: {features}")
         
-        is_violation, probability = get_prediction(features)
+        recorder = get_metrics_recorder()
+        start = time.perf_counter()
+        try:
+            is_violation, probability = get_prediction(features)
+        except ModelNotLoadedError:
+            recorder.record_prediction_error(error_type="model_unavailable")
+            raise
+        except Exception:
+            recorder.record_prediction_error(error_type="prediction_error")
+            raise
+        elapsed = time.perf_counter() - start
+        recorder.observe_prediction_inference(inference_seconds=elapsed)
+
+        result_label = "violation" if is_violation else "no_violation"
+        recorder.record_prediction_result(result=result_label)
+        recorder.observe_prediction_probability(probability=probability)
         
         logger.info(f"Prediction result: is_violation={is_violation}, probability={probability}")
         
@@ -27,6 +46,11 @@ class ItemsService:
     async def predict_by_id(self, advertisement_id: int) -> tuple[bool, float]:
         cached = await self.cache.get_prediction_by_ad(advertisement_id)
         if cached is not None:
+            is_violation, probability = cached
+            recorder = get_metrics_recorder()
+            result_label = "violation" if is_violation else "no_violation"
+            recorder.record_prediction_result(result=result_label)
+            recorder.observe_prediction_probability(probability=probability)
             return cached
 
         logger.info(f"Predicting for advertisement_id={advertisement_id}")

@@ -1,4 +1,17 @@
 services:
+  moderation-service:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ads_db
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - redis
+      - redpanda
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -49,6 +62,24 @@ services:
     environment:
       - REDIS_PORT=6379
       - REDIS_DATABASES=1
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - moderation-service
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
 
 volumes:
   pgdata:
