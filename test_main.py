@@ -4,11 +4,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 from main import app
+from app.dependencies.auth import get_current_account
 from services.ml_model import ModelClient
 from repositories.advertisements import AdvertisementRepository
 from repositories.users import UserRepository
 from repositories.moderation_results import ModerationResultRepository
 from models.domain import (
+    Account,
     UserCreate,
     AdvertisementCreate,
     User,
@@ -18,14 +20,20 @@ from models.domain import (
 )
 
 
+async def _override_get_current_account():
+    return Account(id=1, login="test", password="", is_blocked=False)
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(ModelClient, "_instance", None)
-    
-    with TestClient(app) as c:
-        yield c
-    
-    monkeypatch.setattr(ModelClient, "_instance", None)
+    app.dependency_overrides[get_current_account] = _override_get_current_account
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        app.dependency_overrides.pop(get_current_account, None)
+        monkeypatch.setattr(ModelClient, "_instance", None)
 
 
 @pytest.mark.parametrize("advertisement_id,expected_status", [

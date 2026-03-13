@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.clients.kafka import KafkaProducerClient
 from app.clients.redis_client import RedisClient
 from app.observability import PrometheusMiddleware, PrometheusMetricsRecorder, metrics_router
+from routers.auth import router as auth_router
 from routers.items import router as items_router
 from services.ml_model import ModelClient
 from services.ports.metrics import set_metrics_recorder
@@ -88,5 +89,6 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(PrometheusMiddleware, exclude_paths={"/metrics"})
 
+app.include_router(auth_router)
 app.include_router(items_router)
 app.include_router(metrics_router)

@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+
+from app.dependencies.auth import get_current_account
+from models.domain import Account, ModerationResult
 from models.items import Item, PredictionResponse
-from models.domain import ModerationResult
-from services.items import ItemsService
-from services.ml_model import ModelNotLoadedError
 from repositories.advertisements import AdvertisementRepository
 from repositories.moderation_results import ModerationResultRepository
+from services.items import ItemsService
+from services.ml_model import ModelNotLoadedError
 from app.clients.kafka import KafkaProducerClient
 from storages.prediction_cache import PredictionCacheStorage
 import logging
@@ -32,8 +34,9 @@ def get_kafka(request: Request) -> KafkaProducerClient | None:
 
 @router.post("/predict", response_model=PredictionResponse)
 async def predict(
-    item: Item, 
-    service: ItemsService = Depends()
+    item: Item,
+    account: Account = Depends(get_current_account),
+    service: ItemsService = Depends(),
 ) -> PredictionResponse:
     try:
         is_violation, probability = await service.predict(item)
@@ -58,7 +61,8 @@ async def predict(
 @router.post("/simple_predict", response_model=PredictionResponse)
 async def simple_predict(
     request: SimplePredictRequest,
-    service: ItemsService = Depends()
+    account: Account = Depends(get_current_account),
+    service: ItemsService = Depends(),
 ) -> PredictionResponse:
     try:
         is_violation, probability = await service.predict_by_id(request.advertisement_id)
@@ -89,6 +93,7 @@ async def simple_predict(
 @router.post("/async_predict")
 async def async_predict(
     request: AsyncPredictRequest,
+    account: Account = Depends(get_current_account),
     kafka: KafkaProducerClient | None = Depends(get_kafka),
 ) -> dict:
     if kafka is None:
@@ -116,7 +121,10 @@ async def async_predict(
 
 
 @router.get("/moderation_result/{task_id}")
-async def get_moderation_result(task_id: int) -> dict:
+async def get_moderation_result(
+    task_id: int,
+    account: Account = Depends(get_current_account),
+) -> dict:
     cache = PredictionCacheStorage()
     cached = await cache.get_moderation_result(task_id)
     if cached is not None:
@@ -143,7 +151,10 @@ async def get_moderation_result(task_id: int) -> dict:
 
 
 @router.post("/close")
-async def close_advertisement(request: CloseRequest) -> dict:
+async def close_advertisement(
+    request: CloseRequest,
+    account: Account = Depends(get_current_account),
+) -> dict:
     item_id = request.item_id
     ad_repo = AdvertisementRepository()
     mod_repo = ModerationResultRepository()

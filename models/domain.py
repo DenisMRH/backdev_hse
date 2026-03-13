@@ -3,6 +3,18 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+class Account(BaseModel):
+    id: int
+    login: str
+    password: str
+    is_blocked: bool
+
+
+class AccountCreate(BaseModel):
+    login: str
+    password: str
+
+
 class User(BaseModel):
     id: int
     is_verified: bool

@@ -70,6 +70,7 @@ pyarrow==22.0.0
 pyasn1==0.6.2
 pyasn1_modules==0.4.2
 pycparser==3.0
+PyJWT==2.10.1
 pydantic==2.12.5
 pydantic-extra-types==2.11.0
 pydantic-settings==2.12.0

@@ -23,6 +23,17 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
+  postgres_hw:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: hw
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata_hw:/var/lib/postgresql/data
+
   redpanda:
     image: redpandadata/redpanda:latest
     command:
@@ -83,3 +94,4 @@ services:
 
 volumes:
   pgdata:
+  pgdata_hw:
